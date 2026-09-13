@@ -123,13 +123,15 @@ main{padding:14px 16px 0}
 .card.picked{outline:2px solid var(--accent);outline-offset:-2px}
 .empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:40px 0}
 
-.bar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom));display:flex;align-items:center;gap:12px;box-shadow:0 -6px 20px rgba(60,40,20,.08);transform:translateY(110%);transition:transform .2s}
+.bar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding:10px 16px calc(10px + env(safe-area-inset-bottom));box-shadow:0 -6px 20px rgba(60,40,20,.08);transform:translateY(110%);transition:transform .2s;max-height:45vh;overflow-y:auto}
 .bar.show{transform:none}
-.bar .picks{flex:1;min-width:0}
-.bar .picks b{display:block;font-size:12px;color:var(--muted);letter-spacing:.06em;font-weight:500}
-.bar .picks div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500}
-.send{flex:none;background:var(--accent);color:var(--accent-ink);font-weight:700;padding:11px 18px;border-radius:12px;display:inline-flex;align-items:center;gap:6px}
-.clear{flex:none;color:var(--muted);font-size:13px;padding:8px}
+.bar-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.bar-head b{font-size:12px;color:var(--muted);letter-spacing:.06em;font-weight:500}
+.bar-doneall{flex:none;color:var(--accent);font-size:13px;font-weight:600;padding:4px 2px}
+.bar-chips{display:flex;flex-wrap:wrap;gap:8px}
+.bar-chip{display:inline-flex;align-items:center;gap:8px;background:var(--chip);border-radius:999px;padding:6px 6px 6px 14px;font-size:14px;font-weight:500;max-width:100%}
+.bar-chip span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar-chip button{flex:none;width:24px;height:24px;border-radius:50%;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center}
 @media (prefers-reduced-motion:reduce){.bar,.card{transition:none}}
 
 .sheet{position:fixed;inset:0;z-index:10;background:var(--bg);overflow-y:auto;display:none}
@@ -174,14 +176,7 @@ main{padding:14px 16px 0}
   <div class="grid" id="grid"></div>
 </main>
 
-<div class="bar" id="bar">
-  <div class="picks"><b>今天想吃</b><div id="pickNames"></div></div>
-  <button class="clear" id="clear" type="button">清空</button>
-  <button class="send" id="send" type="button">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>
-    发给他
-  </button>
-</div>
+<div class="bar" id="bar"><div id="barInner"></div></div>
 
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"></div>
 <div class="toast" id="toast"></div>
@@ -192,8 +187,9 @@ const R = JSON.parse(document.getElementById('data').textContent);
 const byId = Object.fromEntries(R.map(r => [r.slug, r]));
 const TAGS = ['全部','自家拿手','荤菜','素菜','汤','主食','快手'];
 let tag = '全部', q = '';
-let picks = [];
-try { picks = JSON.parse(localStorage.getItem('picks') || '[]').filter(s => byId[s]); } catch (e) {}
+let orders = new Set();
+let ordersAt = {};
+let dbCol = null;
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -210,9 +206,9 @@ function renderGrid(){
   const list = filtered();
   $('#count').textContent = `${list.length} 道菜`;
   $('#grid').innerHTML = list.length ? list.map(r => `
-    <button class="card ${picks.includes(r.slug)?'picked':''}" type="button" data-s="${r.slug}">
+    <button class="card ${orders.has(r.slug)?'picked':''}" type="button" data-s="${r.slug}">
       ${r.cover ? `<img class="ph" src="${esc(r.cover)}" alt="" loading="lazy">` : `<div class="ph"></div>`}
-      <span class="heart" data-heart="${r.slug}" aria-label="想吃">${heart(picks.includes(r.slug))}</span>
+      <span class="heart" data-heart="${r.slug}" aria-label="${orders.has(r.slug)?'取消点单':'点这道菜'}">${heart(orders.has(r.slug))}</span>
       <div class="body">
         <h2 class="serif">${esc(r.title)}</h2>
         <div class="meta">
@@ -227,24 +223,71 @@ function heart(on){
   return `<svg width="18" height="18" viewBox="0 0 24 24" fill="${on?'currentColor':'none'}" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-7-4.6-9.3-9A5.3 5.3 0 0 1 12 6.2 5.3 5.3 0 0 1 21.3 12C19 16.4 12 21 12 21z"/></svg>`;
 }
 function renderBar(){
-  const names = picks.map(s => byId[s].title);
-  $('#pickNames').textContent = names.join('、');
-  $('#bar').classList.toggle('show', picks.length > 0);
-  try { localStorage.setItem('picks', JSON.stringify(picks)); } catch (e) {}
+  const list = [...orders].filter(s => byId[s]).sort((a,b) => (ordersAt[a]||0) - (ordersAt[b]||0));
+  $('#bar').classList.toggle('show', list.length > 0);
+  $('#barInner').innerHTML = list.length ? `
+    <div class="bar-head"><b>已点 ${list.length} 道</b>${list.length>1 ? '<button class="bar-doneall" id="doneAll" type="button">全部做完</button>' : ''}</div>
+    <div class="bar-chips">${list.map(s => `
+      <span class="bar-chip"><span>${esc(byId[s].title)}</span><button data-done="${s}" type="button" aria-label="做完，取消点单">✓</button></span>`).join('')}</div>
+  ` : '';
 }
-function toggle(slug){
-  picks = picks.includes(slug) ? picks.filter(s => s!==slug) : [...picks, slug];
+async function toggle(slug){
+  const has = orders.has(slug);
+  if (dbCol) {
+    try {
+      if (has) await dbCol.doc(slug).delete();
+      else await dbCol.doc(slug).set({ title: byId[slug].title, at: Date.now() });
+    } catch (e) { toast('同步失败，请重试'); }
+    return; // UI updates from the onSnapshot echo
+  }
+  if (has) orders.delete(slug); else orders.add(slug);
+  ordersAt[slug] = Date.now();
+  saveLocal();
   renderGrid(); renderBar();
   const b = $('#sheet .pick'); if (b && b.dataset.s===slug) b.replaceWith(pickBtn(slug));
 }
 function pickBtn(slug){
-  const on = picks.includes(slug);
+  const on = orders.has(slug);
   const b = document.createElement('button');
   b.className = 'pick' + (on?' on':''); b.type='button'; b.dataset.s = slug;
-  b.innerHTML = heart(on) + (on ? '已加入今天的菜单' : '今天想吃这个');
+  b.innerHTML = heart(on) + (on ? '已点 · 做好了点这里取消' : '点这道菜');
   b.onclick = () => toggle(slug);
   return b;
 }
+function saveLocal(){
+  try { localStorage.setItem('orders', JSON.stringify([...orders])); } catch (e) {}
+}
+async function initSync(){
+  try {
+    if (window.claude && typeof window.claude.use === 'function') {
+      const db = await window.claude.use('db');
+      if (db) {
+        dbCol = db.collection('orders');
+        dbCol.onSnapshot(snap => {
+          orders = new Set(snap.docs.map(d => d.id));
+          ordersAt = Object.fromEntries(snap.docs.map(d => [d.id, (d.data()||{}).at || 0]));
+          const openSlug = $('#sheet').classList.contains('open') && $('#sheet .pick')?.dataset.s;
+          renderGrid(); renderBar();
+          if (openSlug) { const b = $('#sheet .pick'); if (b) b.replaceWith(pickBtn(openSlug)); }
+        }, () => { dbCol = null; loadLocal(); toast('无法同步点单，仅保存在本机'); });
+        return;
+      }
+    }
+  } catch (e) {}
+  loadLocal();
+}
+function loadLocal(){
+  try { orders = new Set(JSON.parse(localStorage.getItem('orders') || '[]').filter(s => byId[s])); } catch (e) { orders = new Set(); }
+  renderGrid(); renderBar();
+}
+$('#bar').addEventListener('click', e => {
+  const d = e.target.closest('[data-done]'); if (d) { toggle(d.dataset.done); return; }
+  if (e.target.closest('#doneAll')) {
+    const slugs = [...orders];
+    if (dbCol) slugs.forEach(s => dbCol.doc(s).delete().catch(() => {}));
+    else { orders.clear(); saveLocal(); renderGrid(); renderBar(); }
+  }
+});
 function openSheet(slug){
   const r = byId[slug];
   const sh = $('#sheet');
@@ -287,16 +330,10 @@ $('#grid').addEventListener('click', e => {
   const h = e.target.closest('[data-heart]'); if (h) { e.stopPropagation(); toggle(h.dataset.heart); return; }
   const c = e.target.closest('.card'); if (c) openSheet(c.dataset.s);
 });
-$('#clear').onclick = () => { picks = []; renderGrid(); renderBar(); };
 $('#dice').onclick = () => { const l = filtered(); if (!l.length) return; openSheet(l[Math.floor(Math.random()*l.length)].slug); };
-$('#send').onclick = async () => {
-  const text = '今晚想吃：' + picks.map(s => byId[s].title).join('、');
-  if (navigator.share) { try { await navigator.share({text}); return; } catch (e) { if (e.name==='AbortError') return; } }
-  try { await navigator.clipboard.writeText(text); toast('已复制，去 LINE 粘贴给他'); }
-  catch (e) { prompt('复制这段话发给他：', text); }
-};
 
-renderChips(); renderGrid(); renderBar();
+renderChips(); renderGrid();
+initSync();
 </script>
 </body>
 </html>
