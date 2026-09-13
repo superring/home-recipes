@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build index.html (the dish picker page) from recipes/*.md."""
-import json, re, sys
+import hashlib, json, re, sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -10,7 +10,8 @@ OUT = ROOT / "index.html"
 
 def parse(md: Path) -> dict:
     text = md.read_text(encoding="utf-8")
-    r = {"slug": md.stem, "tags": [], "time": "", "source": "", "intro": "",
+    r = {"slug": md.stem, "oid": hashlib.md5(md.stem.encode()).hexdigest()[:16],
+         "tags": [], "time": "", "source": "", "intro": "",
          "cover": "", "ingredients": [], "steps": [], "tips": ""}
     r["title"] = re.search(r"^# (.+)$", text, re.M).group(1).strip()
     m = re.search(r"^标签[:：]\s*(.+)$", text, re.M)
@@ -185,6 +186,7 @@ main{padding:14px 16px 0}
 <script>
 const R = JSON.parse(document.getElementById('data').textContent);
 const byId = Object.fromEntries(R.map(r => [r.slug, r]));
+const slugByOid = Object.fromEntries(R.map(r => [r.oid, r.slug]));
 const TAGS = ['全部','自家拿手','荤菜','素菜','汤','主食','快手'];
 let tag = '全部', q = '';
 let orders = new Set();
@@ -235,8 +237,8 @@ async function toggle(slug){
   const has = orders.has(slug);
   if (dbCol) {
     try {
-      if (has) await dbCol.doc(slug).delete();
-      else await dbCol.doc(slug).set({ title: byId[slug].title, at: Date.now() });
+      if (has) await dbCol.doc(byId[slug].oid).delete();
+      else await dbCol.doc(byId[slug].oid).set({ title: byId[slug].title, at: Date.now() });
     } catch (e) { toast('同步失败，请重试'); }
     return; // UI updates from the onSnapshot echo
   }
@@ -264,8 +266,9 @@ async function initSync(){
       if (db) {
         dbCol = db.collection('orders');
         dbCol.onSnapshot(snap => {
-          orders = new Set(snap.docs.map(d => d.id));
-          ordersAt = Object.fromEntries(snap.docs.map(d => [d.id, (d.data()||{}).at || 0]));
+          const known = snap.docs.filter(d => slugByOid[d.id]);
+          orders = new Set(known.map(d => slugByOid[d.id]));
+          ordersAt = Object.fromEntries(known.map(d => [slugByOid[d.id], (d.data()||{}).at || 0]));
           const openSlug = $('#sheet').classList.contains('open') && $('#sheet .pick')?.dataset.s;
           renderGrid(); renderBar();
           if (openSlug) { const b = $('#sheet .pick'); if (b) b.replaceWith(pickBtn(openSlug)); }
@@ -284,7 +287,7 @@ $('#bar').addEventListener('click', e => {
   const d = e.target.closest('[data-done]'); if (d) { toggle(d.dataset.done); return; }
   if (e.target.closest('#doneAll')) {
     const slugs = [...orders];
-    if (dbCol) slugs.forEach(s => dbCol.doc(s).delete().catch(() => {}));
+    if (dbCol) slugs.forEach(s => dbCol.doc(byId[s].oid).delete().catch(() => {}));
     else { orders.clear(); saveLocal(); renderGrid(); renderBar(); }
   }
 });
