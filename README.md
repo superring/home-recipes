@@ -54,3 +54,4 @@
 - [土豆炖牛肉](recipes/土豆炖牛肉.md)
 - [红烧蘑菇豆腐](recipes/红烧蘑菇豆腐.md)
 - [蘑菇青菜粥](recipes/蘑菇青菜粥.md)
+- [红烧肉](recipes/红烧肉.md)
